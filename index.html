@@ -81,6 +81,23 @@
             border-radius: 5px;
             margin-left: 10px;
         }
+
+        .boss-warning {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff0000;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 0 0 20px #ff0000;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
     </style>
 </head>
 <body>
@@ -105,6 +122,7 @@
         </div>
     </div>
 
+    <script src="boss.js"></script>
     <script>
         // 게임 변수들
         const canvas = document.getElementById('gameCanvas');
@@ -123,6 +141,7 @@
         let powerups = [];
         let particles = [];
         let stars = [];
+        let bossSystem = new BossSystem();
         
         // 파워업 상태
         let powerupStates = {
@@ -175,6 +194,7 @@
             powerups = [];
             particles = [];
             powerupStates = { rapidFire: 0, shield: 0, multiShot: 0 };
+            bossSystem = new BossSystem();
             
             initPlayer();
             initStars();
@@ -226,16 +246,31 @@
         }
         
         // 총알 생성
-        function createBullet(x, y, dx = 0, dy = -8) {
-            bullets.push({
+        function createBullet(x, y, dx = 0, dy = -8, type = 'player') {
+            const bullet = {
                 x: x,
                 y: y,
                 dx: dx,
                 dy: dy,
                 width: 4,
                 height: 10,
-                type: 'player'
-            });
+                type: type
+            };
+            
+            // 보스 총알 타입별 설정
+            if (type.startsWith('boss-')) {
+                bullet.width = 6;
+                bullet.height = 12;
+                if (type === 'boss-laser') {
+                    bullet.width = 8;
+                    bullet.height = 20;
+                } else if (type === 'boss-missile') {
+                    bullet.width = 8;
+                    bullet.height = 16;
+                }
+            }
+            
+            bullets.push(bullet);
         }
         
         // 적 생성
@@ -340,11 +375,11 @@
             // 발사
             if (keys[' '] && player.shootCooldown <= 0) {
                 if (powerupStates.multiShot > 0) {
-                    createBullet(player.x + player.width/2 - 2, player.y, -2, -8);
-                    createBullet(player.x + player.width/2 - 2, player.y, 0, -8);
-                    createBullet(player.x + player.width/2 - 2, player.y, 2, -8);
+                    createBullet(player.x + player.width/2 - 2, player.y, -2, -8, 'player');
+                    createBullet(player.x + player.width/2 - 2, player.y, 0, -8, 'player');
+                    createBullet(player.x + player.width/2 - 2, player.y, 2, -8, 'player');
                 } else {
-                    createBullet(player.x + player.width/2 - 2, player.y);
+                    createBullet(player.x + player.width/2 - 2, player.y, 0, -8, 'player');
                 }
                 player.shootCooldown = powerupStates.rapidFire > 0 ? 5 : 15;
             }
@@ -381,15 +416,7 @@
                 
                 // 적이 발사
                 if (enemy.type === 'strong' && enemy.shootCooldown <= 0 && Math.random() < 0.005) {
-                    bullets.push({
-                        x: enemy.x + enemy.width/2,
-                        y: enemy.y + enemy.height,
-                        dx: 0,
-                        dy: 3,
-                        width: 4,
-                        height: 8,
-                        type: 'enemy'
-                    });
+                    createBullet(enemy.x + enemy.width/2, enemy.y + enemy.height, 0, 3, 'enemy');
                     enemy.shootCooldown = 60;
                 }
                 
@@ -415,6 +442,21 @@
                 particle.dy *= 0.98;
                 return particle.life > 0;
             });
+            
+            // 보스 시스템 업데이트
+            if (bossSystem.shouldSpawnBoss(level)) {
+                bossSystem.spawnBoss(level, canvas);
+                // 보스 등장시 일반 적들 제거
+                enemies = [];
+            }
+            
+            if (bossSystem.hasBoss()) {
+                const bossResult = bossSystem.updateBoss(canvas, bullets, createParticles, createBullet);
+                if (bossResult.destroyed) {
+                    score += bossResult.score;
+                    createParticles(canvas.width/2, canvas.height/2, 30, '#ffff00');
+                }
+            }
             
             // 충돌 감지 - 플레이어 총알과 적
             bullets.forEach((bullet, bulletIndex) => {
@@ -443,11 +485,22 @@
                         }
                     }
                 });
+                
+                // 플레이어 총알과 보스 충돌
+                if (bossSystem.hasBoss()) {
+                    const boss = bossSystem.getBoss();
+                    if (boss && checkCollision(bullet, boss)) {
+                        if (bossSystem.takeDamage(1)) {
+                            createParticles(bullet.x, bullet.y, 5, '#ffff00');
+                            bullets.splice(bulletIndex, 1);
+                        }
+                    }
+                }
             });
             
             // 충돌 감지 - 적 총알과 플레이어
             bullets.forEach((bullet, bulletIndex) => {
-                if (bullet.type !== 'enemy') return;
+                if (bullet.type === 'player') return;
                 
                 if (checkCollision(bullet, player)) {
                     bullets.splice(bulletIndex, 1);
@@ -479,6 +532,21 @@
                 }
             });
             
+            // 충돌 감지 - 보스와 플레이어
+            if (bossSystem.hasBoss()) {
+                const boss = bossSystem.getBoss();
+                if (boss && checkCollision(boss, player)) {
+                    if (powerupStates.shield <= 0) {
+                        lives--;
+                        createParticles(player.x + player.width/2, player.y + player.height/2, 12, '#ff0000');
+                        
+                        if (lives <= 0) {
+                            gameState = 'gameOver';
+                        }
+                    }
+                }
+            }
+            
             // 충돌 감지 - 파워업과 플레이어
             powerups.forEach((powerup, powerupIndex) => {
                 if (checkCollision(powerup, player)) {
@@ -500,8 +568,8 @@
                 }
             });
             
-            // 적 생성
-            if (Math.random() < 1/config.enemySpawnRate && enemies.length < config.maxEnemies) {
+            // 적 생성 (보스전이 아닐 때만)
+            if (!bossSystem.hasBoss() && Math.random() < 1/config.enemySpawnRate && enemies.length < config.maxEnemies) {
                 createEnemy();
             }
             
@@ -534,10 +602,25 @@
             bullets.forEach(bullet => {
                 if (bullet.type === 'player') {
                     ctx.fillStyle = '#00ffff';
-                } else {
+                } else if (bullet.type === 'enemy') {
                     ctx.fillStyle = '#ff3333';
+                } else if (bullet.type.startsWith('boss-')) {
+                    // 보스 총알 타입별 색상
+                    if (bullet.type === 'boss-laser') {
+                        ctx.fillStyle = '#ff0066';
+                        ctx.shadowColor = '#ff0066';
+                        ctx.shadowBlur = 10;
+                    } else if (bullet.type === 'boss-missile') {
+                        ctx.fillStyle = '#ff6600';
+                    } else if (bullet.type === 'boss-pulse') {
+                        ctx.fillStyle = '#6600ff';
+                    } else {
+                        ctx.fillStyle = '#ff3333';
+                    }
                 }
+                
                 ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+                ctx.shadowBlur = 0;
             });
             
             // 적
@@ -617,6 +700,11 @@
                 ctx.fillRect(particle.x, particle.y, particle.size, particle.size);
                 ctx.globalAlpha = 1;
             });
+            
+            // 보스 그리기
+            if (bossSystem.hasBoss()) {
+                bossSystem.drawBoss(ctx, canvas);
+            }
             
             // 게임 오버 화면
             if (gameState === 'gameOver') {
